@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MPU-6050 Real-Time 3D Visualizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827;
+            color: #e5e7eb;
+            overflow: hidden;
+        }
+        #info-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background-color: rgba(31, 41, 55, 0.8);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(75, 85, 99, 0.5);
+            backdrop-filter: blur(10px);
+            max-width: 320px;
+            transition: all 0.3s ease;
+        }
+        .status-dot {
+            height: 10px;
+            width: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            transition: background-color 0.5s ease;
+        }
+        .status-disconnected { background-color: #ef4444; }
+        .status-connected { background-color: #22c55e; }
+        .readout-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; }
+    </style>
+</head>
+<body class="w-screen h-screen m-0 p-0 flex items-center justify-center">
+
+    <div id="container" class="w-full h-full absolute top-0 left-0"></div>
+
+    <div id="info-panel" class="shadow-2xl">
+        <h1 class="text-xl font-bold mb-2 text-white">MPU-6050 Real-Time Visualizer</h1>
+        <div class="flex items-center mb-4">
+            <span id="status-dot" class="status-dot status-disconnected"></span>
+            <span id="status-text" class="text-sm text-gray-300">Disconnected</span>
+        </div>
+        <p class="text-sm text-gray-400 mb-4">Connect to the Arduino and use 'Zero' to calibrate the initial position.</p>
+        
+        <div class="grid grid-cols-2 gap-2">
+            <button id="connect-button" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">Connect</button>
+            <button id="zero-button" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition-colors" disabled>Zero Position</button>
+        </div>
+
+        <div class="mt-4 text-xs text-gray-400 readout-grid">
+            <p><span class="font-semibold">Yaw:</span> <span id="yaw-val">0.00</span>°</p>
+            <p><span class="font-semibold">Pitch:</span> <span id="pitch-val">0.00</span>°</p>
+            <p><span class="font-semibold">Roll:</span> <span id="roll-val">0.00</span>°</p>
+            <p><span class="font-semibold">Temp:</span> <span id="temp-val">0.00</span> °F</p>
+            <p><span class="font-semibold">Accel:</span> <span id="accel-val">0.00</span> G</p>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        let scene, camera, renderer, modelGroup;
+        let port, reader, lineBuffer = '';
+        
+        // --- Store current raw sensor readings ---
+        let currentYPR = { yaw: 0, pitch: 0, roll: 0 };
+        let currentAccelG = 0;
+        
+        // --- Store the offset values when "Zero" is clicked ---
+        let zeroOffset = { yaw: 0, pitch: 0, roll: 0, accel: 0 };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111827);
+            scene.fog = new THREE.Fog(0x111827, 10, 50);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            const container = document.getElementById('container');
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            container.appendChild(renderer.domElement);
+
+            modelGroup = new THREE.Group();
+            const boardGeometry = new THREE.BoxGeometry(2, 0.1, 1.2);
+            const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x004f98 });
+            const board = new THREE.Mesh(boardGeometry, boardMaterial);
+            modelGroup.add(board);
+
+            const chipGeometry = new THREE.BoxGeometry(0.4, 0.15, 0.4);
+            const chipMaterial = new THREE.MeshStandardMaterial({ color: 0x1e1e1e });
+            const chip = new THREE.Mesh(chipGeometry, chipMaterial);
+            chip.position.y = 0.05;
+            modelGroup.add(chip);
+            
+            const indicatorGeometry = new THREE.ConeGeometry(0.1, 0.4, 16);
+            const indicatorMaterial = new THREE.MeshStandardMaterial({ color: 0xff4136 });
+            const indicator = new THREE.Mesh(indicatorGeometry, indicatorMaterial);
+            indicator.position.set(0.8, 0.2, 0); 
+            indicator.rotation.z = -Math.PI / 2;
+            modelGroup.add(indicator);
+
+            scene.add(modelGroup);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+            const gridHelper = new THREE.GridHelper(10, 10, 0x4b5563, 0x374151);
+            scene.add(gridHelper);
+
+            document.getElementById('connect-button').addEventListener('click', connectSerial);
+            document.getElementById('zero-button').addEventListener('click', zeroPosition);
+            window.addEventListener('resize', onWindowResize, false);
+            
+            animate();
+        }
+        
+        async function connectSerial() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+                updateConnectionStatus(true);
+                readUntilClosed();
+            } catch (e) {
+                updateConnectionStatus(false);
+            }
+        }
+
+        async function readUntilClosed() {
+            const textDecoder = new TextDecoderStream();
+            const readableStreamClosed = port.readable.pipeTo(textDecoder.writable).catch(error => {});
+            reader = textDecoder.readable.getReader();
+
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    lineBuffer += value;
+                    
+                    let lines = lineBuffer.split('\n');
+                    while (lines.length > 1) {
+                        const line = lines.shift().trim();
+                        if (line) processData(line);
+                    }
+                    lineBuffer = lines[0];
+                }
+            } catch (error) { /* Error reading */ } 
+            finally {
+                reader.releaseLock();
+                await readableStreamClosed;
+                if (port && port.writable) await port.close();
+                updateConnectionStatus(false);
+            }
+        }
+
+        function processData(data) {
+            const parts = data.split(',');
+            if (parts.length === 5) {
+                const yaw = parseFloat(parts[0]);
+                const pitch = parseFloat(parts[1]);
+                const roll = parseFloat(parts[2]);
+                const tempF = parseFloat(parts[3]);
+                const accelG = parseFloat(parts[4]);
+
+                if (!isNaN(yaw)) currentYPR.yaw = yaw;
+                if (!isNaN(pitch)) currentYPR.pitch = pitch;
+                if (!isNaN(roll)) currentYPR.roll = roll;
+                if (!isNaN(accelG)) currentAccelG = accelG;
+                
+                if (!isNaN(tempF)) {
+                    document.getElementById('temp-val').textContent = tempF.toFixed(2);
+                }
+
+                updateDisplays();
+            }
+        }
+
+        // --- UPDATED: Zero button now zeroes orientation AND acceleration ---
+        function zeroPosition() {
+            zeroOffset.yaw = currentYPR.yaw;
+            zeroOffset.pitch = currentYPR.pitch;
+            zeroOffset.roll = currentYPR.roll;
+            zeroOffset.accel = currentAccelG;
+            updateDisplays(); // Immediately update UI to show zeroed values
+        }
+
+        // --- This function now updates all dynamic text and the 3D model ---
+        function updateDisplays() {
+            const relativeYaw = currentYPR.yaw - zeroOffset.yaw;
+            const relativePitch = currentYPR.pitch - zeroOffset.pitch;
+            const relativeRoll = currentYPR.roll - zeroOffset.roll;
+            const relativeAccel = currentAccelG - zeroOffset.accel;
+
+            // Update all text readouts
+            document.getElementById('yaw-val').textContent = relativeYaw.toFixed(2);
+            document.getElementById('pitch-val').textContent = relativePitch.toFixed(2);
+            document.getElementById('roll-val').textContent = relativeRoll.toFixed(2);
+            document.getElementById('accel-val').textContent = relativeAccel.toFixed(2);
+
+            // Update 3D model rotation
+            const yawRad = THREE.MathUtils.degToRad(-relativeYaw); 
+            const pitchRad = THREE.MathUtils.degToRad(relativePitch);
+            // *** FIX: Invert Roll axis as requested ***
+            const rollRad = THREE.MathUtils.degToRad(-relativeRoll);
+            
+            const euler = new THREE.Euler(pitchRad, yawRad, rollRad, 'YXZ');
+            modelGroup.setRotationFromEuler(euler);
+        }
+
+        function updateConnectionStatus(isConnected) {
+            const statusDot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+            const zeroButton = document.getElementById('zero-button');
+            const connectButton = document.getElementById('connect-button');
+
+            if (isConnected) {
+                statusDot.className = 'status-dot status-connected';
+                statusText.textContent = 'Connected';
+                connectButton.textContent = 'Disconnect';
+                connectButton.onclick = disconnectSerial;
+                zeroButton.disabled = false;
+            } else {
+                statusDot.className = 'status-dot status-disconnected';
+                statusText.textContent = 'Disconnected';
+                connectButton.textContent = 'Connect';
+                connectButton.onclick = connectSerial;
+                zeroButton.disabled = true;
+                // --- UPDATED: Reset all offsets on disconnect ---
+                zeroOffset = { yaw: 0, pitch: 0, roll: 0, accel: 0 };
+                updateDisplays(); // Refresh UI to show non-zeroed values
+            }
+        }
+
+        async function disconnectSerial() {
+            if (reader) await reader.cancel();
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+    </script>
+</body>
+</html>
