@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MPU-6050 Rocket Visualizer</title>
+    <title>MPU-9250 Rocket Visualizer</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -12,10 +12,8 @@
             color: #e5e7eb;
             overflow: hidden;
         }
-        #info-panel {
+        .info-panel {
             position: absolute;
-            top: 20px;
-            left: 20px;
             background-color: rgba(31, 41, 55, 0.8);
             padding: 20px;
             border-radius: 12px;
@@ -24,6 +22,9 @@
             max-width: 320px;
             transition: all 0.3s ease;
         }
+        #main-panel { top: 20px; left: 20px; }
+        /* --- NEW: Style for the altitude panel --- */
+        #altitude-panel { top: 20px; right: 20px; }
         .status-dot {
             height: 10px;
             width: 10px;
@@ -41,8 +42,8 @@
 
     <div id="container" class="w-full h-full absolute top-0 left-0"></div>
 
-    <div id="info-panel" class="shadow-2xl">
-        <h1 class="text-xl font-bold mb-2 text-white">MPU-6050 Rocket Visualizer</h1>
+    <div id="main-panel" class="info-panel shadow-2xl">
+        <h1 class="text-xl font-bold mb-2 text-white">MPU-9250 Rocket Visualizer</h1>
         <div class="flex items-center mb-4">
             <span id="status-dot" class="status-dot status-disconnected"></span>
             <span id="status-text" class="text-sm text-gray-300">Disconnected</span>
@@ -63,19 +64,33 @@
         </div>
     </div>
 
+    <!-- --- NEW: Altitude Display Panel --- -->
+    <div id="altitude-panel" class="info-panel shadow-2xl">
+        <h2 class="text-lg font-bold mb-2 text-white">Flight Data</h2>
+        <div class="text-sm text-gray-300 space-y-2">
+            <p><span class="font-semibold">Altitude:</span> <span id="alt-val">0.00</span> m</p>
+            <p><span class="font-semibold">Max Altitude:</span> <span id="max-alt-val">0.00</span> m</p>
+        </div>
+    </div>
+
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <script>
         let scene, camera, renderer, modelGroup;
         let port, reader, lineBuffer = '';
         
-        // --- Store current raw sensor readings ---
         let currentQuaternion = new THREE.Quaternion();
         let currentAccelG = 0;
+        let currentTempF = 0;
         
-        // --- Store the offset values when "Zero" is clicked ---
-        let zeroOffsetQuaternion = new THREE.Quaternion(); // Identity quaternion
+        let zeroOffsetQuaternion = new THREE.Quaternion();
         let zeroOffsetAccel = 0;
+
+        // --- NEW: Variables for altitude simulation ---
+        let altitude = 0;
+        let maxAltitude = 0;
+        let lastFrameTime = performance.now();
 
         function init() {
             scene = new THREE.Scene();
@@ -90,7 +105,7 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             container.appendChild(renderer.domElement);
 
-            // Create the Rocket Model
+            // Create the Rocket Model using your dimensions
             const rocketModel = new THREE.Group();
             const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.2 });
             const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xff4136, metalness: 0.5, roughness: 0.5 });
@@ -109,7 +124,7 @@
                 fin.position.z = Math.sin(angle) * 0.5;
                 fin.position.y = -0.75;
                 fin.rotation.y = -angle;
-		fin.rotation.z = -10;
+		        fin.rotation.z = -10; // Your custom fin rotation
                 rocketModel.add(fin);
             }
             
@@ -117,7 +132,6 @@
             modelGroup.add(rocketModel);
             scene.add(modelGroup);
 
-            // Lighting and Helpers
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
             scene.add(ambientLight);
             const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -126,7 +140,6 @@
             const gridHelper = new THREE.GridHelper(20, 20, 0x4b5563, 0x374151);
             scene.add(gridHelper);
 
-            // Event Listeners
             document.getElementById('connect-button').addEventListener('click', connectSerial);
             document.getElementById('zero-button').addEventListener('click', zeroPosition);
             window.addEventListener('resize', onWindowResize, false);
@@ -170,11 +183,8 @@
         }
 
         function processData(data) {
-            // *** UPDATED: Now expects 6 data points (w,x,y,z,temp,accel) ***
             const parts = data.split(',');
             if (parts.length === 6) {
-                // MPU6050 quaternion order is w, x, y, z
-                // three.js quaternion constructor is (x, y, z, w)
                 const w = parseFloat(parts[0]);
                 const x = parseFloat(parts[1]);
                 const y = parseFloat(parts[2]);
@@ -182,43 +192,56 @@
                 const tempF = parseFloat(parts[4]);
                 const accelG = parseFloat(parts[5]);
 
-                if (!isNaN(w)) {
-                    currentQuaternion.set(x, y, z, w);
-                }
+                // Update variables here. The screen is updated in the animate loop.
+                if (!isNaN(w)) currentQuaternion.set(x, -y, -z, w); // Invert Yaw and Roll
                 if (!isNaN(accelG)) currentAccelG = accelG;
-                if (!isNaN(tempF)) {
-                    document.getElementById('temp-val').textContent = tempF.toFixed(2);
-                }
-                updateDisplays();
+                if (!isNaN(tempF)) currentTempF = tempF;
             }
         }
         
         function zeroPosition() {
-            // Get the inverse of the current orientation. This will be our "zero"
             zeroOffsetQuaternion = currentQuaternion.clone().conjugate();
             zeroOffsetAccel = currentAccelG;
-            updateDisplays();
+            
+            // --- NEW: Reset altitude on zero ---
+            altitude = 0;
+            maxAltitude = 0;
         }
 
         function updateDisplays() {
-            // Apply the zeroing offset to the current quaternion to get the relative rotation
             const relativeQuaternion = zeroOffsetQuaternion.clone().multiply(currentQuaternion);
-
-            // *** FIX: Apply the final quaternion directly to the model ***
             modelGroup.setRotationFromQuaternion(relativeQuaternion);
             
-            // For display purposes, convert the relative quaternion back to Euler angles
             const euler = new THREE.Euler().setFromQuaternion(relativeQuaternion, 'YXZ');
             const relativeYaw = THREE.MathUtils.radToDeg(euler.y);
             const relativePitch = THREE.MathUtils.radToDeg(euler.x);
             const relativeRoll = THREE.MathUtils.radToDeg(euler.z);
-
             const relativeAccel = currentAccelG - zeroOffsetAccel;
 
-            document.getElementById('yaw-val').textContent = (-relativeYaw).toFixed(2);
+            document.getElementById('yaw-val').textContent = relativeYaw.toFixed(2);
             document.getElementById('pitch-val').textContent = relativePitch.toFixed(2);
-            document.getElementById('roll-val').textContent = (-relativeRoll).toFixed(2);
+            document.getElementById('roll-val').textContent = relativeRoll.toFixed(2);
             document.getElementById('accel-val').textContent = relativeAccel.toFixed(2);
+            document.getElementById('temp-val').textContent = currentTempF.toFixed(2);
+            
+            // --- NEW: Update altitude displays ---
+            document.getElementById('alt-val').textContent = altitude.toFixed(2);
+            document.getElementById('max-alt-val').textContent = maxAltitude.toFixed(2);
+        }
+        
+        function simulateAltitude(dt) {
+            const rocketUp = new THREE.Vector3(0, 1, 0);
+            rocketUp.applyQuaternion(modelGroup.quaternion);
+
+            const verticalVelocity = rocketUp.y;
+            altitude += verticalVelocity * dt * 20;
+
+            if (altitude < 0) {
+                altitude = 0;
+            }
+            if (altitude > maxAltitude) {
+                maxAltitude = altitude;
+            }
         }
 
         function updateConnectionStatus(isConnected) {
@@ -239,9 +262,8 @@
                 connectButton.textContent = 'Connect';
                 connectButton.onclick = connectSerial;
                 zeroButton.disabled = true;
-                zeroOffsetQuaternion.set(0, 0, 0, 1); // Reset to identity
+                zeroOffsetQuaternion.set(0, 0, 0, 1);
                 zeroOffsetAccel = 0;
-                updateDisplays();
             }
         }
 
@@ -251,6 +273,17 @@
         
         function animate() {
             requestAnimationFrame(animate);
+            
+            const now = performance.now();
+            const dt = (now - lastFrameTime) / 1000;
+            lastFrameTime = now;
+
+            // --- PERFORMANCE FIX: All screen updates happen here ---
+            if (port && port.readable) {
+                simulateAltitude(dt);
+                updateDisplays();
+            }
+            
             renderer.render(scene, camera);
         }
 
