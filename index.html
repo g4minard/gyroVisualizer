@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MPU-6050 Real-Time 3D Visualizer</title>
+    <title>MPU-6050 Rocket Visualizer</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -42,7 +42,7 @@
     <div id="container" class="w-full h-full absolute top-0 left-0"></div>
 
     <div id="info-panel" class="shadow-2xl">
-        <h1 class="text-xl font-bold mb-2 text-white">MPU-6050 Real-Time Visualizer</h1>
+        <h1 class="text-xl font-bold mb-2 text-white">MPU-6050 Rocket Visualizer</h1>
         <div class="flex items-center mb-4">
             <span id="status-dot" class="status-dot status-disconnected"></span>
             <span id="status-text" class="text-sm text-gray-300">Disconnected</span>
@@ -70,11 +70,12 @@
         let port, reader, lineBuffer = '';
         
         // --- Store current raw sensor readings ---
-        let currentYPR = { yaw: 0, pitch: 0, roll: 0 };
+        let currentQuaternion = new THREE.Quaternion();
         let currentAccelG = 0;
         
         // --- Store the offset values when "Zero" is clicked ---
-        let zeroOffset = { yaw: 0, pitch: 0, roll: 0, accel: 0 };
+        let zeroOffsetQuaternion = new THREE.Quaternion(); // Identity quaternion
+        let zeroOffsetAccel = 0;
 
         function init() {
             scene = new THREE.Scene();
@@ -89,36 +90,43 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             container.appendChild(renderer.domElement);
 
-            modelGroup = new THREE.Group();
-            const boardGeometry = new THREE.BoxGeometry(2, 0.1, 1.2);
-            const boardMaterial = new THREE.MeshStandardMaterial({ color: 0x004f98 });
-            const board = new THREE.Mesh(boardGeometry, boardMaterial);
-            modelGroup.add(board);
-
-            const chipGeometry = new THREE.BoxGeometry(0.4, 0.15, 0.4);
-            const chipMaterial = new THREE.MeshStandardMaterial({ color: 0x1e1e1e });
-            const chip = new THREE.Mesh(chipGeometry, chipMaterial);
-            chip.position.y = 0.05;
-            modelGroup.add(chip);
+            // Create the Rocket Model
+            const rocketModel = new THREE.Group();
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.2 });
+            const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xff4136, metalness: 0.5, roughness: 0.5 });
+            const bodyGeometry = new THREE.CylinderGeometry(0.3, 0.3, 2.5, 32);
+            const rocketBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            rocketModel.add(rocketBody);
+            const noseGeometry = new THREE.ConeGeometry(0.4, 1, 32);
+            const noseCone = new THREE.Mesh(noseGeometry, accentMaterial);
+            noseCone.position.y = 1.75;
+            rocketModel.add(noseCone);
+            for (let i = 0; i < 3; i++) {
+                const finGeometry = new THREE.BoxGeometry(1.0, 0.7, 0.1);
+                const fin = new THREE.Mesh(finGeometry, accentMaterial);
+                const angle = (i / 3) * Math.PI * 2;
+                fin.position.x = Math.cos(angle) * 0.5;
+                fin.position.z = Math.sin(angle) * 0.5;
+                fin.position.y = -0.75;
+                fin.rotation.y = -angle;
+		fin.rotation.z = -10;
+                rocketModel.add(fin);
+            }
             
-            const indicatorGeometry = new THREE.ConeGeometry(0.1, 0.4, 16);
-            const indicatorMaterial = new THREE.MeshStandardMaterial({ color: 0xff4136 });
-            const indicator = new THREE.Mesh(indicatorGeometry, indicatorMaterial);
-            indicator.position.set(0.8, 0.2, 0); 
-            indicator.rotation.z = -Math.PI / 2;
-            modelGroup.add(indicator);
-
+            modelGroup = new THREE.Group();
+            modelGroup.add(rocketModel);
             scene.add(modelGroup);
 
+            // Lighting and Helpers
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
             scene.add(ambientLight);
             const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
             directionalLight.position.set(5, 10, 7.5);
             scene.add(directionalLight);
-
-            const gridHelper = new THREE.GridHelper(10, 10, 0x4b5563, 0x374151);
+            const gridHelper = new THREE.GridHelper(20, 20, 0x4b5563, 0x374151);
             scene.add(gridHelper);
 
+            // Event Listeners
             document.getElementById('connect-button').addEventListener('click', connectSerial);
             document.getElementById('zero-button').addEventListener('click', zeroPosition);
             window.addEventListener('resize', onWindowResize, false);
@@ -141,13 +149,11 @@
             const textDecoder = new TextDecoderStream();
             const readableStreamClosed = port.readable.pipeTo(textDecoder.writable).catch(error => {});
             reader = textDecoder.readable.getReader();
-
             try {
                 while (true) {
                     const { value, done } = await reader.read();
                     if (done) break;
                     lineBuffer += value;
-                    
                     let lines = lineBuffer.split('\n');
                     while (lines.length > 1) {
                         const line = lines.shift().trim();
@@ -155,8 +161,7 @@
                     }
                     lineBuffer = lines[0];
                 }
-            } catch (error) { /* Error reading */ } 
-            finally {
+            } catch (error) {} finally {
                 reader.releaseLock();
                 await readableStreamClosed;
                 if (port && port.writable) await port.close();
@@ -165,57 +170,55 @@
         }
 
         function processData(data) {
+            // *** UPDATED: Now expects 6 data points (w,x,y,z,temp,accel) ***
             const parts = data.split(',');
-            if (parts.length === 5) {
-                const yaw = parseFloat(parts[0]);
-                const pitch = parseFloat(parts[1]);
-                const roll = parseFloat(parts[2]);
-                const tempF = parseFloat(parts[3]);
-                const accelG = parseFloat(parts[4]);
+            if (parts.length === 6) {
+                // MPU6050 quaternion order is w, x, y, z
+                // three.js quaternion constructor is (x, y, z, w)
+                const w = parseFloat(parts[0]);
+                const x = parseFloat(parts[1]);
+                const y = parseFloat(parts[2]);
+                const z = parseFloat(parts[3]);
+                const tempF = parseFloat(parts[4]);
+                const accelG = parseFloat(parts[5]);
 
-                if (!isNaN(yaw)) currentYPR.yaw = yaw;
-                if (!isNaN(pitch)) currentYPR.pitch = pitch;
-                if (!isNaN(roll)) currentYPR.roll = roll;
+                if (!isNaN(w)) {
+                    currentQuaternion.set(x, -y, -z, w);
+                }
                 if (!isNaN(accelG)) currentAccelG = accelG;
-                
                 if (!isNaN(tempF)) {
                     document.getElementById('temp-val').textContent = tempF.toFixed(2);
                 }
-
                 updateDisplays();
             }
         }
-
-        // --- UPDATED: Zero button now zeroes orientation AND acceleration ---
+        
         function zeroPosition() {
-            zeroOffset.yaw = currentYPR.yaw;
-            zeroOffset.pitch = currentYPR.pitch;
-            zeroOffset.roll = currentYPR.roll;
-            zeroOffset.accel = currentAccelG;
-            updateDisplays(); // Immediately update UI to show zeroed values
+            // Get the inverse of the current orientation. This will be our "zero"
+            zeroOffsetQuaternion = currentQuaternion.clone().conjugate();
+            zeroOffsetAccel = currentAccelG;
+            updateDisplays();
         }
 
-        // --- This function now updates all dynamic text and the 3D model ---
         function updateDisplays() {
-            const relativeYaw = currentYPR.yaw - zeroOffset.yaw;
-            const relativePitch = currentYPR.pitch - zeroOffset.pitch;
-            const relativeRoll = currentYPR.roll - zeroOffset.roll;
-            const relativeAccel = currentAccelG - zeroOffset.accel;
+            // Apply the zeroing offset to the current quaternion to get the relative rotation
+            const relativeQuaternion = zeroOffsetQuaternion.clone().multiply(currentQuaternion);
 
-            // Update all text readouts
+            // *** FIX: Apply the final quaternion directly to the model ***
+            modelGroup.setRotationFromQuaternion(relativeQuaternion);
+            
+            // For display purposes, convert the relative quaternion back to Euler angles
+            const euler = new THREE.Euler().setFromQuaternion(relativeQuaternion, 'YXZ');
+            const relativeYaw = THREE.MathUtils.radToDeg(euler.y);
+            const relativePitch = THREE.MathUtils.radToDeg(euler.x);
+            const relativeRoll = THREE.MathUtils.radToDeg(euler.z);
+
+            const relativeAccel = currentAccelG - zeroOffsetAccel;
+
             document.getElementById('yaw-val').textContent = relativeYaw.toFixed(2);
             document.getElementById('pitch-val').textContent = relativePitch.toFixed(2);
             document.getElementById('roll-val').textContent = relativeRoll.toFixed(2);
             document.getElementById('accel-val').textContent = relativeAccel.toFixed(2);
-
-            // Update 3D model rotation
-            const yawRad = THREE.MathUtils.degToRad(-relativeYaw); 
-            const pitchRad = THREE.MathUtils.degToRad(relativePitch);
-            // *** FIX: Invert Roll axis as requested ***
-            const rollRad = THREE.MathUtils.degToRad(-relativeRoll);
-            
-            const euler = new THREE.Euler(pitchRad, yawRad, rollRad, 'YXZ');
-            modelGroup.setRotationFromEuler(euler);
         }
 
         function updateConnectionStatus(isConnected) {
@@ -236,9 +239,9 @@
                 connectButton.textContent = 'Connect';
                 connectButton.onclick = connectSerial;
                 zeroButton.disabled = true;
-                // --- UPDATED: Reset all offsets on disconnect ---
-                zeroOffset = { yaw: 0, pitch: 0, roll: 0, accel: 0 };
-                updateDisplays(); // Refresh UI to show non-zeroed values
+                zeroOffsetQuaternion.set(0, 0, 0, 1); // Reset to identity
+                zeroOffsetAccel = 0;
+                updateDisplays();
             }
         }
 
