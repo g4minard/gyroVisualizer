@@ -1,40 +1,45 @@
 /*
-  Final Receiver Sketch
-  Receives sensor data wirelessly and prints it to the Serial Monitor
-  in the format expected by the web application.
-  Upload this to the Arduino connected to your computer.
+  ==============================================================================
+  | Receiver Sketch with GPS - Ground Station                                  |
+  |----------------------------------------------------------------------------|
+  | Receives sensor + GPS data wirelessly and outputs to Serial Monitor        |
+  | in the format expected by the web dashboard.                               |
+  | Upload this to the Arduino connected to your computer.                     |
+  ==============================================================================
 */
 
 #include <SPI.h>
 #include <nRF24L01.h>
 #include <RF24.h>
 
-// nRF24L01 object
-RF24 radio(9, 10); // CE, CSN
+// --- nRF24L01 Configuration ---
+RF24 radio(9, 10); // CE, CSN pins
+const byte address[6] = "00001"; // Must match transmitter
 
-// nRF24L01 settings
-const byte address[6] = "00001"; // Must be the same on both receiver and transmitter
-
-// A data structure to hold all our sensor values.
-// This MUST be identical to the struct on the transmitter.
+// --- Data Structure ---
+// MUST be identical to transmitter's struct
 struct SensorData {
   float qW, qX, qY, qZ;
   float tempF;
   float accelG;
+  float gpsSpeedMps;
+  float altitudeFeet;
 };
 
 SensorData receivedData;
 
 void setup() {
-  // Start serial at the high speed required by the web app
+  // Start serial at high speed for web app
   Serial.begin(115200);
   while (!Serial);
 
-  // Initialize Radio
+  // Initialize radio
   radio.begin();
   radio.openReadingPipe(0, address);
   radio.setPALevel(RF24_PA_MIN);
   radio.startListening();
+  
+  Serial.println("# Receiver ready - waiting for data...");
 }
 
 void loop() {
@@ -42,12 +47,15 @@ void loop() {
     // Read the data structure
     radio.read(&receivedData, sizeof(SensorData));
 
-    // Print the data in the comma-separated format the web app expects
+    // Output in CSV format for web dashboard:
+    // qw,qx,qy,qz,tempF,accelG,gpsSpeed,altitude
     Serial.print(receivedData.qW, 6); Serial.print(",");
     Serial.print(receivedData.qX, 6); Serial.print(",");
     Serial.print(receivedData.qY, 6); Serial.print(",");
     Serial.print(receivedData.qZ, 6); Serial.print(",");
-    Serial.print(receivedData.tempF); Serial.print(",");
-    Serial.println(receivedData.accelG);
+    Serial.print(receivedData.tempF, 2); Serial.print(",");
+    Serial.print(receivedData.accelG, 3); Serial.print(",");
+    Serial.print(receivedData.gpsSpeedMps, 2); Serial.print(",");
+    Serial.println(receivedData.altitudeFeet, 1);
   }
 }

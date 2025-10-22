@@ -3,32 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IMU Web Visualizer</title>
+    <title>Rocket Flight Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', sans-serif;
-            background-color: #111827; /* Tailwind gray-900 */
-            color: #e5e7eb; /* Tailwind gray-200 */
-            overflow: hidden; /* Prevent scrollbars */
+            background: linear-gradient(135deg, #1e3a8a 0%, #3730a3 100%);
+            color: #e5e7eb;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
         }
-        #info-panel {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background-color: rgba(31, 41, 55, 0.8); /* gray-800 with transparency */
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid rgba(75, 85, 99, 0.5); /* gray-600 with transparency */
+        
+        .panel {
+            background: rgba(31, 41, 55, 0.85);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-            max-width: 320px;
-            transition: all 0.3s ease;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border: 1px solid rgba(75, 85, 99, 0.5);
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
         }
+        
         .status-dot {
             height: 10px;
             width: 10px;
@@ -37,213 +35,196 @@
             margin-right: 8px;
             transition: background-color 0.5s ease;
         }
-        .status-disconnected { background-color: #ef4444; } /* red-500 */
-        .status-connected { background-color: #22c55e; } /* green-500 */
+        .status-disconnected { background-color: #ef4444; }
+        .status-connected { background-color: #22c55e; }
         
-        /* Custom toggle switch styles */
-        .toggle-switch {
-            position: relative;
-            display: inline-block;
-            width: 40px;
-            height: 20px;
-        }
+        .toggle-switch { position: relative; display: inline-block; width: 40px; height: 20px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #4b5563; transition: .3s; border-radius: 20px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+        input:checked + .slider { background-color: #3b82f6; }
+        input:checked + .slider:before { transform: translateX(20px); }
         
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
+        .speedometer { position: relative; width: 100%; aspect-ratio: 1; }
         
-        .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #4b5563; /* gray-600 */
-            transition: .3s;
-            border-radius: 20px;
-        }
-        
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 14px;
-            width: 14px;
-            left: 3px;
-            bottom: 3px;
-            background-color: white;
-            transition: .3s;
-            border-radius: 50%;
-        }
-        
-        input:checked + .slider {
-            background-color: #3b82f6; /* blue-500 */
-        }
-        
-        input:checked + .slider:before {
-            transform: translateX(20px);
-        }
+        .thermometer { width: 40px; height: 100%; background: rgba(55, 65, 81, 0.5); border-radius: 20px; position: relative; border: 2px solid rgba(107, 114, 128, 0.5); }
+        .thermometer-fill { position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, #3b82f6, #8b5cf6, #ec4899); border-radius: 20px; transition: height 0.3s ease; }
     </style>
 </head>
-<body class="w-screen h-screen m-0 p-0 flex items-center justify-center">
-
-    <div id="container" class="w-full h-full absolute top-0 left-0"></div>
-
-    <div id="info-panel">
-        <h1 class="text-xl font-bold mb-2 text-white">IMU Visualizer</h1>
-        <div class="flex items-center mb-4">
-            <span id="status-dot" class="status-dot status-disconnected"></span>
-            <span id="status-text" class="text-sm text-gray-300">Disconnected</span>
-        </div>
-        <p class="text-sm text-gray-400 mb-4">Connect to the Arduino running the IMU sketch. Use 'Zero' to calibrate the initial orientation.</p>
-        
-        <div class="grid grid-cols-2 gap-3 mb-4">
-            <button id="connect-button" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200">Connect</button>
-            <button id="zero-button" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200" disabled>Zero Position</button>
-        </div>
-
-        <!-- Axis Inversion Controls -->
-        <div class="mb-4 p-3 bg-gray-800 rounded-lg border border-gray-700">
-            <h3 class="text-sm font-semibold text-white mb-3">Axis Inversion</h3>
-            <div class="space-y-2">
-                <div class="flex items-center justify-between">
-                    <label class="text-sm text-gray-300">Invert Yaw:</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="invert-yaw">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div class="flex items-center justify-between">
-                    <label class="text-sm text-gray-300">Invert Pitch:</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="invert-pitch">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div class="flex items-center justify-between">
-                    <label class="text-sm text-gray-300">Invert Roll:</label>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="invert-roll">
-                        <span class="slider"></span>
-                    </label>
+<body class="w-screen h-screen p-4 flex items-center justify-center">
+    <div class="w-full max-w-7xl h-full grid grid-cols-12 gap-4">
+    
+        <!-- Left: Gyro Visualization (4 columns) -->
+        <div class="col-span-12 md:col-span-4 panel p-3 flex flex-col">
+            <h2 class="text-lg font-bold mb-1 text-white">Orientation</h2>
+            <div class="flex items-center mb-2">
+                <span id="status-dot" class="status-dot"></span>
+                <span id="status-text" class="text-sm text-gray-300">Disconnected</span>
+            </div>
+            
+            <div class="flex gap-2 mb-2">
+                <button id="connect-button" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-3 rounded text-sm">Connect</button>
+                <button id="zero-button" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 rounded text-sm" disabled>Zero</button>
+            </div>
+            
+            <div class="mb-2 p-3 bg-gray-900/50 rounded-lg border border-gray-700">
+                <h3 class="text-sm font-semibold text-white mb-2">Axis Inversion</h3>
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm text-gray-300">Invert Yaw:</label>
+                        <label class="toggle-switch"><input type="checkbox" id="invert-yaw" checked><span class="slider"></span></label>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm text-gray-300">Invert Pitch:</label>
+                        <label class="toggle-switch"><input type="checkbox" id="invert-pitch"><span class="slider"></span></label>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <label class="text-sm text-gray-300">Invert Roll:</label>
+                        <label class="toggle-switch"><input type="checkbox" id="invert-roll" checked><span class="slider"></span></label>
+                    </div>
                 </div>
             </div>
-        </div>
-
-        <div class="pt-4 border-t border-gray-700 text-sm text-gray-300 flex flex-col gap-2">
-            <div class="flex justify-between items-center">
-                <p class="font-semibold">Yaw:</p>
-                <span id="yaw-val">0.00°</span>
-            </div>
-            <div class="flex justify-between items-center">
-                <p class="font-semibold">Pitch:</p>
-                <span id="pitch-val">0.00°</span>
-            </div>
-            <div class="flex justify-between items-center">
-                <p class="font-semibold">Roll:</p>
-                <span id="roll-val">0.00°</span>
-            </div>
-            <div class="flex justify-between items-center">
-                <p class="font-semibold">Temp:</p>
-                <span id="temp-val">0.00° F</span>
-            </div>
-            <div class="flex justify-between items-center">
-                <p class="font-semibold">Accel:</p>
-                <span id="accel-val">0.00 G</span>
+            
+            <div id="gyro-container" class="flex-1 relative bg-gray-900/50 rounded-lg min-h-0"></div>
+            
+            <div class="mt-2 grid grid-cols-3 gap-2 text-xs">
+                <div class="bg-gray-800 p-2 rounded text-center">
+                    <div class="text-gray-400">Yaw</div>
+                    <div id="yaw-val" class="text-lg font-bold">0.00°</div>
+                </div>
+                <div class="bg-gray-800 p-2 rounded text-center">
+                    <div class="text-gray-400">Pitch</div>
+                    <div id="pitch-val" class="text-lg font-bold">0.00°</div>
+                </div>
+                <div class="bg-gray-800 p-2 rounded text-center">
+                    <div class="text-gray-400">Roll</div>
+                    <div id="roll-val" class="text-lg font-bold">0.00°</div>
+                </div>
             </div>
         </div>
         
-        <div class="mt-4 pt-4 border-t border-gray-700 text-xs text-gray-400">
-            <p class="mb-2">Debug Info:</p>
-            <div class="flex justify-between">
-                <span>Quaternion Norm:</span>
-                <span id="quat-norm">1.000</span>
+        <!-- Center & Right: Readouts (8 columns) -->
+        <div class="col-span-12 md:col-span-8 flex flex-col gap-4">
+            
+            <div class="grid grid-cols-2 gap-4 flex-1">
+                <!-- Speedometer -->
+                <div class="panel p-4 flex flex-col items-center justify-center">
+                    <h2 class="text-lg font-bold mb-2 text-white text-center">Velocity</h2>
+                    <div class="speedometer"><canvas id="speedometer-canvas"></canvas></div>
+                    <div class="text-center mt-2">
+                        <div class="text-4xl font-extrabold text-green-400" id="velocity-display">0.0</div>
+                        <div class="text-gray-400 text-sm">m/s</div>
+                    </div>
+                </div>
+                
+                <!-- Altitude -->
+                <div class="panel p-4 flex flex-col items-center">
+                    <h2 class="text-lg font-bold mb-2 text-white">Altitude</h2>
+                    <div class="flex-1 flex items-center justify-center w-full">
+                        <div class="relative h-full flex items-center">
+                             <div class="absolute left-0 h-full flex flex-col justify-between text-xs text-gray-400" style="margin-left: -50px; text-align: right; width: 40px;">
+                                <span>10.5k</span><span>7.9k</span><span>5.3k</span><span>2.6k</span><span>0</span>
+                            </div>
+                            <div class="thermometer"><div class="thermometer-fill" id="altitude-fill"></div></div>
+                        </div>
+                    </div>
+                    <div class="mt-2 text-center">
+                        <div class="text-4xl font-extrabold text-pink-400" id="altitude-display">0</div>
+                        <div class="text-gray-400 text-sm">feet</div>
+                        <div class="text-xs text-gray-500 mt-1">Max: <span id="max-altitude">0</span> ft</div>
+                    </div>
+                </div>
             </div>
-            <div class="flex justify-between mt-1">
-                <span>Data Rate:</span>
-                <span id="data-rate">0 Hz</span>
+            
+            <!-- Other Readouts -->
+            <div class="panel p-4">
+                <h2 class="text-lg font-bold mb-3 text-white">Telemetry</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="text-center bg-gray-800/50 p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-blue-400" id="temp-display">0.0°</div>
+                        <div class="text-gray-400 mt-1 text-sm">Temperature (F)</div>
+                    </div>
+                    <div class="text-center bg-gray-800/50 p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-purple-400" id="accel-display">0.00</div>
+                        <div class="text-gray-400 mt-1 text-sm">Acceleration (G)</div>
+                    </div>
+                    <div class="text-center bg-gray-800/50 p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-yellow-400" id="data-rate-display">0</div>
+                        <div class="text-gray-400 mt-1 text-sm">Data Rate (Hz)</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
     <script>
         // --- 3D Scene Variables ---
         let scene, camera, renderer, modelGroup;
         
         // --- Serial Connection Variables ---
-        let port, reader;
-        let lineBuffer = '';
+        let port, reader, lineBuffer = '';
 
         // --- Sensor Data Variables ---
         let currentQuaternion = new THREE.Quaternion();
         let zeroOffsetQuaternion = new THREE.Quaternion();
         
-        // --- Axis Inversion Variables ---
-        let invertYaw = false;
-        let invertPitch = false;
-        let invertRoll = false;
-        
-        // --- Data rate tracking ---
-        let lastDataTime = Date.now();
-        let dataCount = 0;
+        // --- Axis Inversion & Flight Data ---
+        let invertYaw = true, invertPitch = false, invertRoll = true;
+        let temperature = 0, velocity = 0, altitude = 0, maxAltitude = 0, acceleration = 0;
         let dataRate = 0;
-
-        // --- Initialization ---
+        
+        // --- Canvas ---
+        let speedometerCanvas, speedometerCtx;
+        
+        // --- INITIALIZATION ---
         function init() {
-            // Scene setup
+            initGyro();
+            initSpeedometer();
+            setupEventListeners();
+            animate();
+            updateDashboard(); // Start the dashboard update loop
+        }
+
+        function setupEventListeners() {
+            document.getElementById('connect-button').addEventListener('click', toggleSerialConnection);
+            document.getElementById('zero-button').addEventListener('click', zeroPosition);
+            
+            document.getElementById('invert-yaw').addEventListener('change', (e) => invertYaw = e.target.checked);
+            document.getElementById('invert-pitch').addEventListener('change', (e) => invertPitch = e.target.checked);
+            document.getElementById('invert-roll').addEventListener('change', (e) => invertRoll = e.target.checked);
+            
+            window.addEventListener('resize', onWindowResize, false);
+
+            setInterval(() => {
+                document.getElementById('data-rate-display').textContent = dataRate;
+                dataRate = 0;
+            }, 1000);
+        }
+
+        function initGyro() {
+            const container = document.getElementById('gyro-container');
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x111827);
-            scene.fog = new THREE.Fog(0x111827, 15, 40);
-
-            // Camera setup
-            const container = document.getElementById('container');
-            camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
-            camera.position.set(0, 1.5, 5);
+            camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 1, 4);
             camera.lookAt(scene.position);
-
-            // Renderer setup
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(container.clientWidth, container.clientHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
-
-            // Create 3D objects
             createRocketModel();
             createLighting();
-            createHelpers();
-            
-            // Add event listeners
-            document.getElementById('connect-button').addEventListener('click', toggleSerialConnection);
-            document.getElementById('zero-button').addEventListener('click', zeroPosition);
-            
-            // Add axis inversion event listeners
-            document.getElementById('invert-yaw').addEventListener('change', (e) => {
-                invertYaw = e.target.checked;
-            });
-            document.getElementById('invert-pitch').addEventListener('change', (e) => {
-                invertPitch = e.target.checked;
-            });
-            document.getElementById('invert-roll').addEventListener('change', (e) => {
-                invertRoll = e.target.checked;
-            });
-            
-            window.addEventListener('resize', onWindowResize, false);
-            
-            // Update data rate display
-            setInterval(() => {
-                document.getElementById('data-rate').textContent = dataRate.toFixed(0) + ' Hz';
-                dataRate = 0;
-            }, 1000);
-            
-            // Start animation loop
-            animate();
+            scene.add(new THREE.GridHelper(10, 10, 0x4b5563, 0x374151));
         }
-
-        // --- Serial Communication ---
+        
+        function initSpeedometer() {
+            speedometerCanvas = document.getElementById('speedometer-canvas');
+            onWindowResize(); // Call once to set initial size
+            speedometerCtx = speedometerCanvas.getContext('2d');
+        }
+        
+        // --- SERIAL COMMUNICATION ---
         async function toggleSerialConnection() {
             if (port) await disconnectSerial();
             else await connectSerial();
@@ -254,7 +235,7 @@
                 port = await navigator.serial.requestPort();
                 await port.open({ baudRate: 115200 });
                 updateConnectionStatus(true);
-                readLoop(); // Start the read loop
+                readLoop();
             } catch (e) {
                 console.error("Connection failed:", e);
                 updateConnectionStatus(false);
@@ -262,23 +243,17 @@
         }
 
         async function disconnectSerial() {
-            if (reader) {
-                await reader.cancel(); // This will cause the readLoop to break
-            }
+            if (reader) await reader.cancel();
         }
 
         async function readLoop() {
             const textDecoder = new TextDecoderStream();
             const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
             reader = textDecoder.readable.getReader();
-
             try {
                 while (true) {
                     const { value, done } = await reader.read();
-                    if (done) {
-                        // The reader has been canceled, usually by disconnectSerial()
-                        break;
-                    }
+                    if (done) break;
                     lineBuffer += value;
                     let lines = lineBuffer.split('\n');
                     while (lines.length > 1) {
@@ -288,13 +263,11 @@
                     lineBuffer = lines[0];
                 }
             } catch (error) {
-                // This will catch errors like the device being unplugged
                 console.error("Read loop error:", error);
             } finally {
-                // This cleanup runs whether the loop breaks or an error occurs
                 reader.releaseLock();
-                await readableStreamClosed.catch(() => {}); // Ignore abort errors
-                await port.close();
+                await readableStreamClosed.catch(() => {});
+                if(port) await port.close();
                 port = null;
                 reader = null;
                 updateConnectionStatus(false);
@@ -303,119 +276,86 @@
 
         function processData(data) {
             const parts = data.split(',');
-            if (parts.length === 6) {
-                const [w, x, y, z, tempF, accelG] = parts.map(parseFloat);
-                if ([w, x, y, z, tempF, accelG].some(isNaN)) {
-                    console.warn("Received corrupted data, skipping:", data);
-                    return; 
+            if (parts.length === 8) { // Expecting 8 values now
+                const values = parts.map(parseFloat);
+                if (values.some(isNaN)) {
+                    console.warn("Corrupted data:", data);
+                    return;
                 }
-                
-                // FIXED: Correct quaternion mapping for standard aerospace coordinates
-                // The MPU9250 outputs quaternions in its own frame, we need to convert to Three.js frame
-                // Three.js uses: Y-up, X-right, Z-forward
-                // MPU9250 typically: Z-up, X-forward, Y-right
-                
-                // This mapping assumes the sensor is mounted with:
-                // - X axis pointing forward
-                // - Y axis pointing right
-                // - Z axis pointing up
-                // Adjust these if your sensor is mounted differently
+                const [w, x, y, z, tempF, accelG, gpsSpeed, gpsAltitude] = values;
                 currentQuaternion.set(x, y, z, w);
-                
-                // Display quaternion norm for debugging (should be ~1.0)
-                const norm = Math.sqrt(w*w + x*x + y*y + z*z);
-                document.getElementById('quat-norm').textContent = norm.toFixed(3);
-                
-                // Update temperature and acceleration displays
-                document.getElementById('temp-val').textContent = tempF.toFixed(2) + '° F';
-                document.getElementById('accel-val').textContent = accelG.toFixed(2) + ' G';
-                
-                // Track data rate
+                temperature = tempF;
+                acceleration = accelG;
+                velocity = gpsSpeed;
+                altitude = gpsAltitude;
+                if (altitude > maxAltitude) maxAltitude = altitude;
                 dataRate++;
             } else {
-                console.warn("Received malformed data, skipping:", data);
+                console.warn("Unexpected data format (expected 8 parts):", data);
             }
         }
         
         function zeroPosition() {
             zeroOffsetQuaternion = currentQuaternion.clone().conjugate();
-            console.log("Position zeroed at current orientation");
         }
 
-        // --- 3D Rendering and Animation ---
+        // --- ANIMATION & RENDERING ---
         function animate() {
             requestAnimationFrame(animate);
             
-            // Apply zero offset to get relative quaternion
             const relativeQuaternion = zeroOffsetQuaternion.clone().multiply(currentQuaternion);
             
-            // Apply axis inversions by creating inverse rotations
+            // *** THIS IS THE FIXED INVERSION LOGIC FROM YOUR OLD FILE ***
             const finalQuaternion = relativeQuaternion.clone();
-            
             if (invertYaw || invertPitch || invertRoll) {
-                // Extract Euler angles to apply inversions
                 const euler = new THREE.Euler();
-                euler.setFromQuaternion(relativeQuaternion, 'YXZ'); // YXZ order matches our angle extraction
-                
-                // Apply inversions to individual axes
+                euler.setFromQuaternion(relativeQuaternion, 'YXZ');
                 if (invertYaw) euler.y = -euler.y;
                 if (invertPitch) euler.x = -euler.x;
                 if (invertRoll) euler.z = -euler.z;
-                
-                // Convert back to quaternion
                 finalQuaternion.setFromEuler(euler);
             }
             
-            // Smooth the rotation using slerp
             modelGroup.quaternion.slerp(finalQuaternion, 0.15);
-            
-            // Update angle readouts (using the relative quaternion for display)
-            updateReadouts(relativeQuaternion);
             
             renderer.render(scene, camera);
         }
         
+        function updateDashboard() {
+            // Update all non-3D UI elements
+            document.getElementById('temp-display').textContent = temperature.toFixed(1) + '°';
+            document.getElementById('accel-display').textContent = acceleration.toFixed(2);
+            document.getElementById('velocity-display').textContent = velocity.toFixed(1);
+            document.getElementById('altitude-display').textContent = Math.round(altitude);
+            document.getElementById('max-altitude').textContent = Math.round(maxAltitude);
+            
+            const altPercent = Math.min(100, (altitude / 10500) * 100);
+            document.getElementById('altitude-fill').style.height = altPercent + '%';
+            
+            drawSpeedometer(velocity);
+            updateReadouts(modelGroup.quaternion);
+            
+            requestAnimationFrame(updateDashboard);
+        }
+        
         function updateReadouts(q) {
-            // Extract rotation angles directly from the quaternion matrix
-            // This avoids Euler order confusion
-            
-            // Convert quaternion to rotation matrix elements we need
             const w = q.w, x = q.x, y = q.y, z = q.z;
-            
-            // Calculate yaw (rotation around vertical axis)
             const yaw = Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + z * z));
-            
-            // Calculate pitch - using the roll formula
-            const sinPitch = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
-            const pitch = sinPitch;  // Already in radians
-
-            // Calculate roll - using the pitch formula  
+            const pitch = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
             const sinRoll = 2 * (w * z - x * y);
-            const roll = Math.abs(sinRoll) >= 1 ? 
-                Math.sign(sinRoll) * Math.PI / 2 : Math.asin(sinRoll);
+            const roll = Math.abs(sinRoll) >= 1 ? Math.sign(sinRoll) * Math.PI / 2 : Math.asin(sinRoll);
             
-            // Convert to degrees and apply display inversions for readout consistency
-            let yawDeg = THREE.MathUtils.radToDeg(yaw);
-            let pitchDeg = THREE.MathUtils.radToDeg(pitch);
-            let rollDeg = THREE.MathUtils.radToDeg(roll);
-            
-            // Apply inversions to displayed values for consistency
-            if (invertYaw) yawDeg = -yawDeg;
-            if (invertPitch) pitchDeg = -pitchDeg;
-            if (invertRoll) rollDeg = -rollDeg;
-            
-            document.getElementById('yaw-val').textContent = yawDeg.toFixed(2) + '°';
-            document.getElementById('pitch-val').textContent = pitchDeg.toFixed(2) + '°';
-            document.getElementById('roll-val').textContent = rollDeg.toFixed(2) + '°';
+            document.getElementById('yaw-val').textContent = THREE.MathUtils.radToDeg(yaw).toFixed(2) + '°';
+            document.getElementById('pitch-val').textContent = THREE.MathUtils.radToDeg(pitch).toFixed(2) + '°';
+            document.getElementById('roll-val').textContent = THREE.MathUtils.radToDeg(roll).toFixed(2) + '°';
         }
 
-        // --- UI Updates and Helpers ---
+        // --- UI & 3D HELPERS ---
         function updateConnectionStatus(isConnected) {
             const statusDot = document.getElementById('status-dot');
             const statusText = document.getElementById('status-text');
             const zeroButton = document.getElementById('zero-button');
             const connectButton = document.getElementById('connect-button');
-
             if (isConnected) {
                 statusDot.className = 'status-dot status-connected';
                 statusText.textContent = 'Connected';
@@ -426,27 +366,19 @@
                 statusText.textContent = 'Disconnected';
                 connectButton.textContent = 'Connect';
                 zeroButton.disabled = true;
-                currentQuaternion.set(0,0,0,1);
-                zeroOffsetQuaternion.set(0,0,0,1);
             }
         }
-        
-        // --- 3D Model Creation ---
+
         function createRocketModel() {
+            modelGroup = new THREE.Group();
             const rocketModel = new THREE.Group();
             const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xd1d5db, metalness: 0.8, roughness: 0.2 });
             const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.5, roughness: 0.5 });
-            
-            // Main body
             const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 2.5, 32), bodyMaterial);
             rocketModel.add(body);
-            
-            // Nose cone
             const noseCone = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1, 32), accentMaterial);
             noseCone.position.y = 1.75;
             rocketModel.add(noseCone);
-            
-            // Fins
             for (let i = 0; i < 3; i++) {
                 const fin = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.8, 0.08), accentMaterial);
                 const angle = (i / 3) * Math.PI * 2;
@@ -454,12 +386,6 @@
                 fin.rotation.y = -angle;
                 rocketModel.add(fin);
             }
-            
-            // Add coordinate axis helper (for debugging)
-            const axesHelper = new THREE.AxesHelper(2);
-            rocketModel.add(axesHelper);
-            
-            modelGroup = new THREE.Group();
             modelGroup.add(rocketModel);
             scene.add(modelGroup);
         }
@@ -471,23 +397,56 @@
             scene.add(light);
         }
 
-        function createHelpers() {
-            const gridHelper = new THREE.GridHelper(20, 20, 0x4b5563, 0x374151);
-            scene.add(gridHelper);
-            
-            // Add world coordinate axes (for reference)
-            const worldAxes = new THREE.AxesHelper(5);
-            scene.add(worldAxes);
-        }
-
         function onWindowResize() {
-            const container = document.getElementById('container');
-            camera.aspect = container.clientWidth / container.clientHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(container.clientWidth, container.clientHeight);
+            const container = document.getElementById('gyro-container');
+            if(container.clientWidth > 0 && container.clientHeight > 0) {
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            }
+            const speedContainer = speedometerCanvas.parentElement;
+            if (speedContainer.offsetWidth > 0) {
+                speedometerCanvas.width = speedContainer.offsetWidth;
+                speedometerCanvas.height = speedContainer.offsetWidth;
+            }
         }
 
-        // --- Start the Application ---
+        function drawSpeedometer(speed) {
+            const canvas = speedometerCanvas;
+            const ctx = speedometerCtx;
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            if(centerX <= 0) return;
+            const radius = canvas.width * 0.4;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0.75 * Math.PI, 2.25 * Math.PI);
+            ctx.lineWidth = 20;
+            ctx.strokeStyle = 'rgba(55, 65, 81, 0.5)';
+            ctx.stroke();
+            const maxSpeed = 100;
+            const speedAngle = 0.75 * Math.PI + (Math.min(speed, maxSpeed) / maxSpeed) * 1.5 * Math.PI;
+            const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+            gradient.addColorStop(0, '#22c55e');
+            gradient.addColorStop(0.5, '#eab308');
+            gradient.addColorStop(1, '#ef4444');
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0.75 * Math.PI, speedAngle);
+            ctx.lineWidth = 20;
+            ctx.strokeStyle = gradient;
+            ctx.stroke();
+            for (let i = 0; i <= 10; i++) {
+                const angle = 0.75 * Math.PI + (i / 10) * 1.5 * Math.PI;
+                const x1 = centerX + Math.cos(angle) * (radius - 15);
+                const y1 = centerY + Math.sin(angle) * (radius - 15);
+                const x2 = centerX + Math.cos(angle) * (radius + 5);
+                const y2 = centerY + Math.sin(angle) * (radius + 5);
+                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+                ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 2; ctx.stroke();
+            }
+        }
+
+        // --- Start Application ---
         init();
     </script>
 </body>

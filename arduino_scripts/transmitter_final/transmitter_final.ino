@@ -1,10 +1,9 @@
 /*
   ==============================================================================
-  | Final Transmitter Sketch - Corrected for your MPU9250 library             |
+  | Transmitter Sketch with GPS - Mobile Unit                                  |
   |----------------------------------------------------------------------------|
-  | Reads MPU-9250, performs sensor fusion, and sends the orientation          |
-  | quaternion and other data wirelessly via an nRF24L01 module.               |
-  | Upload this to the Arduino on your mobile unit.                            |
+  | Reads MPU-9250 and NEO-6M GPS, performs sensor fusion, and sends           |
+  | orientation quaternion, GPS velocity, and altitude via nRF24L01.           |
   ==============================================================================
 */
 
@@ -12,105 +11,125 @@
 #include <SPI.h>
 #include <nRF24L01.h>
 #include <RF24.h>
-#include <Wire.h> // Explicitly include the Wire library for I2C
-#include "MPU9250.h" // MPU9250 library
+#include <Wire.h>
+#include <SoftwareSerial.h>
+#include <TinyGPS++.h>
+#include "MPU9250.h"
 
 // --- Pin Configuration ---
 const int NRF_CE_PIN = 9;
 const int NRF_CSN_PIN = 10;
 const int MPU_ADDRESS = 0x68;
+const int GPS_RX_PIN = 4;  // GPS TX connects here
+const int GPS_TX_PIN = 3;  // GPS RX connects here
 
 // --- Global Objects ---
 RF24 radio(NRF_CE_PIN, NRF_CSN_PIN);
-MPU9250 mpu; // Create the MPU object
+MPU9250 mpu;
+TinyGPSPlus gps;
+SoftwareSerial gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
 
 // --- nRF24L01 Configuration ---
-const byte radioAddress[6] = "00001"; // Must match the receiver's address
+const byte radioAddress[6] = "00001";
 
 // --- Data Structure ---
-// This struct holds all the sensor data we want to send.
-// It MUST be identical on both the transmitter and receiver sketches.
+// This struct holds all sensor + GPS data
+// MUST be identical on transmitter and receiver
 struct SensorData {
   float qW, qX, qY, qZ;
   float tempF;
   float accelG;
+  float gpsSpeedMps;     // GPS velocity in m/s
+  float altitudeFeet;    // GPS altitude in feet
 };
 SensorData dataToSend;
 
-
 void setup() {
-  Serial.begin(115200); // For debugging the transmitter itself
+  Serial.begin(115200);
+  gpsSerial.begin(9600); // NEO-6M default baud rate
   
   // --- Initialize MPU-9250 ---
-  Wire.begin(); // Start the I2C bus
+  Wire.begin();
   
-  // Use the setup function
   if (!mpu.setup(MPU_ADDRESS)) {  
-    Serial.println("MPU connection failed. Check wiring or I2C address.");
-    while (1); // Halt execution
+    Serial.println("MPU connection failed. Check wiring!");
+    while (1);
   }
   
-  // The library you have doesn't use setAccelRange, setGyroRange, or setFilterBandwidth
-  // Those settings are typically configured internally by the library
-  // If you need to adjust settings, check your library's documentation
-  
-  Serial.println("Calibrating MPU-9250. Keep the sensor still...");
+  Serial.println("Calibrating MPU-9250. Keep sensor still...");
   mpu.calibrateAccelGyro();
   Serial.println("Accel/Gyro calibration complete.");
   
-  Serial.println("Now calibrate magnetometer - move sensor in figure-8 pattern...");
+  Serial.println("Calibrate magnetometer - move in figure-8...");
   mpu.calibrateMag();
   Serial.println("Mag calibration complete.");
 
   // --- Initialize nRF24L01 Radio ---
   radio.begin();
   radio.openWritingPipe(radioAddress);
-  radio.setPALevel(RF24_PA_MIN); // Use minimum power for short-range testing
+  radio.setPALevel(RF24_PA_MIN);
   radio.stopListening();
   
-  Serial.println("Transmitter setup complete. Sending data...");
+  Serial.println("Transmitter setup complete. Waiting for GPS fix...");
 }
 
 void loop() {
-  // Check if new data is available from the sensor
+  // Update GPS data (non-blocking)
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+  
+  // Update IMU data
   if (mpu.update()) {
-    // Load the quaternion data into our struct
+    // Load quaternion data
     dataToSend.qW = mpu.getQuaternionW();
     dataToSend.qX = mpu.getQuaternionX();
     dataToSend.qY = mpu.getQuaternionY();
     dataToSend.qZ = mpu.getQuaternionZ();
     
-    // Get temperature and convert Celsius to Fahrenheit
+    // Temperature (Celsius to Fahrenheit)
     dataToSend.tempF = mpu.getTemperature() * 9.0/5.0 + 32.0;
     
-    // Calculate total linear acceleration magnitude (gravity compensated)
-    // Get linear acceleration (gravity-free) in m/s^2
+    // Linear acceleration magnitude in G's
     float ax = mpu.getLinearAccX();
     float ay = mpu.getLinearAccY();
     float az = mpu.getLinearAccZ();
-    
-    // Calculate magnitude and convert to G's (divide by 9.807 m/s^2)
     dataToSend.accelG = sqrt(ax*ax + ay*ay + az*az) / 9.807;
+
+    // GPS data (use 0 if invalid)
+    if (gps.speed.isValid()) {
+      dataToSend.gpsSpeedMps = gps.speed.mps();
+    } else {
+      dataToSend.gpsSpeedMps = 0.0;
+    }
+    
+    if (gps.altitude.isValid()) {
+      dataToSend.altitudeFeet = gps.altitude.feet();
+    } else {
+      dataToSend.altitudeFeet = 0.0;
+    }
 
     // Send the data packet
     bool result = radio.write(&dataToSend, sizeof(SensorData));
     
-    // Optional: Uncomment for debugging
+    // Optional debugging - uncomment to see transmitted data
     /*
     if (result) {
       Serial.print("Sent - Q: ");
-      Serial.print(dataToSend.qW, 3); Serial.print(", ");
-      Serial.print(dataToSend.qX, 3); Serial.print(", ");
-      Serial.print(dataToSend.qY, 3); Serial.print(", ");
+      Serial.print(dataToSend.qW, 3); Serial.print(",");
+      Serial.print(dataToSend.qX, 3); Serial.print(",");
+      Serial.print(dataToSend.qY, 3); Serial.print(",");
       Serial.print(dataToSend.qZ, 3);
       Serial.print(" | Temp: "); Serial.print(dataToSend.tempF, 1);
       Serial.print("F | Accel: "); Serial.print(dataToSend.accelG, 2);
-      Serial.println("G");
+      Serial.print("G | Speed: "); Serial.print(dataToSend.gpsSpeedMps, 2);
+      Serial.print("m/s | Alt: "); Serial.print(dataToSend.altitudeFeet, 1);
+      Serial.print("ft | Sats: "); Serial.println(gps.satellites.value());
     } else {
       Serial.println("Transmission failed");
     }
     */
   }
 
-  delay(10); // Small delay to prevent flooding the receiver
+  delay(10); // Small delay to prevent flooding
 }
