@@ -1,7 +1,6 @@
-<<<<<<< HEAD
-# MPU-6050 Real-Time 3D Web Visualizer
+# MPU-9250 Real-Time 3D Web Visualizer
 
-A real-time 3D web visualizer for the MPU-6050 accelerometer and gyroscope, communicating directly from an Arduino Nano to a web browser using the Web Serial API.
+A real-time 3D web visualizer for the MPU-9250 accelerometer and gyroscope, communicating directly from an Arduino Nano to a web browser using the Web Serial API.
 
 ## Features
 
